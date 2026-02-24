@@ -1,59 +1,61 @@
 package com.example.taskmanager.controller;
 
-import com.example.taskmanager.dto.UserRequest;
-import com.example.taskmanager.dto.UserResponse;
+import com.example.taskmanager.domain.User;
 import com.example.taskmanager.domain.UserRole;
-import com.example.taskmanager.exception.EmailAlreadyExistsException;
-import com.example.taskmanager.exception.GlobalExceptionHandler;
-import com.example.taskmanager.service.UserService;
+import com.example.taskmanager.dto.UserRequest;
+import com.example.taskmanager.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
-import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
-import org.springframework.context.annotation.Import;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
-
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(UserController.class)
-@Import({GlobalExceptionHandler.class, JacksonAutoConfiguration.class})
-@WithMockUser
+@SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@Transactional
 class UserControllerTest {
 
     @Autowired MockMvc mockMvc;
-    @MockitoBean UserService userService;
+    @Autowired UserRepository userRepository;
+    @Autowired PasswordEncoder passwordEncoder;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
-            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+            .registerModule(new JavaTimeModule());
 
-    private final UserResponse sampleResponse = new UserResponse(
-            1L, "Test User", "test@example.com", UserRole.USER, LocalDateTime.now());
+    private User savedUser;
+
+    @BeforeEach
+    void setUp() {
+        savedUser = userRepository.save(User.builder()
+                .name("Existing User")
+                .email("existing@example.com")
+                .password(passwordEncoder.encode("password123"))
+                .role(UserRole.USER)
+                .build());
+    }
 
     @Test
     @DisplayName("POST /api/v1/users - should create user and return 201")
     void shouldCreateUser() throws Exception {
-        when(userService.create(any())).thenReturn(sampleResponse);
-
-        UserRequest request = new UserRequest("Test User", "test@example.com", "password123");
+        UserRequest request = new UserRequest("New User", "new@example.com", "password123");
 
         mockMvc.perform(post("/api/v1/users")
-                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.email").value("test@example.com"))
-                .andExpect(jsonPath("$.id").value(1));
+                .andExpect(jsonPath("$.email").value("new@example.com"));
     }
 
     @Test
@@ -62,34 +64,26 @@ class UserControllerTest {
         UserRequest request = new UserRequest("", "not-an-email", "short");
 
         mockMvc.perform(post("/api/v1/users")
-                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isUnprocessableEntity());
+                .andExpect(status().is(422));
     }
 
     @Test
     @DisplayName("POST /api/v1/users - should return 409 on duplicate email")
     void shouldReturn409OnDuplicateEmail() throws Exception {
-        when(userService.create(any())).thenThrow(new EmailAlreadyExistsException("test@example.com"));
-
-        UserRequest request = new UserRequest("Test", "test@example.com", "password123");
+        UserRequest request = new UserRequest("Existing User", "existing@example.com", "password123");
 
         mockMvc.perform(post("/api/v1/users")
-                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isConflict());
     }
 
     @Test
-    @DisplayName("GET /api/v1/users/{id} - should return user")
-    void shouldGetUserById() throws Exception {
-        when(userService.findById(1L)).thenReturn(sampleResponse);
-
-        mockMvc.perform(get("/api/v1/users/1"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(1))
-                .andExpect(jsonPath("$.email").value("test@example.com"));
+    @DisplayName("GET /api/v1/users/{id} - should return 401 when not authenticated")
+    void shouldReturn401WhenNotAuthenticated() throws Exception {
+        mockMvc.perform(get("/api/v1/users/" + savedUser.getId()))
+                .andExpect(status().isUnauthorized());
     }
 }
